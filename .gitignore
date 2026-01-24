@@ -1,0 +1,31 @@
+notepad .gitignore
+```
+
+3. **Paste this into Notepad:**
+```
+# Virtual Environment
+venv/
+.venv/
+env/
+ENV/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyc
+.Python
+
+# IDEs
+.vscode/
+.idea/
+.DS_Store
+
+# Streamlit
+.streamlit/
+
+# Output files
+*[0-9].txt
+*_split.zip
+
+# Environment
+.env
