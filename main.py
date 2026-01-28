@@ -3,6 +3,9 @@ from langchain_community.vectorstores import Chroma
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_classic.chains.retrieval_qa.base import RetrievalQA
+from langchain_classic.prompts import PromptTemplate
+from langchain_classic.chains.llm import LLMChain
+
 
 import os
 import hashlib
@@ -11,7 +14,7 @@ import gradio as gr
 
 # Initialize models - using better settings for tutoring
 llm = OllamaLLM(
-    model="qwen:0.5b",
+    model="qwen:1.8b",
     temperature=0.7,  # Higher for more natural, conversational responses
     num_ctx=2048,
     num_predict=400  # Longer responses for explanations
@@ -116,83 +119,134 @@ def file_handler( pdf_files, progress=gr.Progress()):
         # Return summary
     return f"✓ Processed {len(documents)} pages into {len(chunks)} chunks. Ready!"
 
-def answer_question(question) :
-    # This Function Answers Question Using the uploaded documents
+def answer_question(question):
+    # This function answers questions using uploaded documents
     
-    # Check if documents have been uploaded
+    # Check if documents were uploaded
     if vectorstore is None:
-        return "Pls Upload a document first!"
+        return "Please upload documents first!"     
     
-    # Create question-answering chain
+    
+    template = """You are a patient and helpful tutor. Your goal is to TEACH the student, not just give quick answers.
+
+    When answering:
+    1. Explain the concept clearly using the context
+    2. Break it down step-by-step if it's complex
+    3. Give examples from the context when possible
+    4. Help the student understand WHY, not just WHAT
+
+    IMPORTANT: Only use information from the context below. If the answer isn't in the context, say "I don't have information about that in the uploaded document."
+
+    Context from uploaded document:
+    {context}
+
+    Student's question: {question}
+
+    Your explanation (remember to teach, not just answer):"""
+    
+    prompt = PromptTemplate(template=template, input_variables=["context", "question"])
+    
+    # Create QA chain with custom prompt
     qa_chain = RetrievalQA.from_chain_type(
-        llm=llm, # TinyLLamma
-        retriever=vectorstore.as_retriever(search_kwargs={"k": 3}), # Find 3 most relevant chunks 
+        llm=llm,
+        retriever=vectorstore.as_retriever(search_kwargs={"k": 3}),
         return_source_documents=False,
+        chain_type_kwargs={"prompt": prompt}
     )
     
     # Get answer
     response = qa_chain.invoke({"query": question})
     
+    # Return the answer
     return response["result"]
 
+def chat_response(question, history):
+    # This function handles chat-style responses with history
+    
+    if not question.strip():
+        return history, ""
+    
+    # Get answer from your existing function
+    answer = answer_question(question)
+    
+    # Gradio 6.x uses dictionary format for messages
+    history.append({"role": "user", "content": question})
+    history.append({"role": "assistant", "content": answer})
+    
+    # Return updated history and clear input
+    return history, ""
 
 # Gradio interface
 
-with gr.Blocks(title="Offline Study Assistant") as demo:
-    # Title
-    gr.Markdown("# 📚 Offline Study Assistant")
-    gr.Markdown("Upload your course materials and ask questions!")
+with gr.Blocks(title="Offline Study Assistant", theme=gr.themes.Origin()) as demo:
     
-    # Tab1 Upload Documents
-    with gr.Tab("Upload Documents"):
-        # File Upload
-        pdf_upload = gr.Files(
-            label="Upload PDFs",
-            file_count="multiple",
-            file_types=[".pdf"],
-        )
+    gr.Markdown("# 📚 Offline Study Assistant")
+    
+    with gr.Row():
+        # LEFT SIDEBAR - Upload Documents
+        with gr.Column(scale=1):
+            gr.Markdown("### 📤 Upload Documents")
+            
+            pdf_upload = gr.File(
+                label="Select PDF",
+                file_count="single",
+                file_types=[".pdf"]
+            )
+            
+            upload_btn = gr.Button("Process Document", variant="primary")
+            upload_status = gr.Textbox(label="Status", lines=2, interactive=False)
+            
+            upload_btn.click(
+                fn=file_handler,
+                inputs=[pdf_upload],
+                outputs=[upload_status],
+                show_progress=True
+            )
+            
+            gr.Markdown("---")
+            gr.Markdown("💡 **Tip:** Upload one document at a time for faster processing")
         
-        # Process button
-        upload_btn = gr.Button("Process Documents")
-        
-        # Status Output 
-        Upload_Output = gr.Textbox(label="Status")
-        
-        # Connect button to function 
-        upload_btn.click(
-            fn=file_handler,
-            inputs=[pdf_upload],
-            outputs=[Upload_Output],
-            show_progress=True, # Show Progress bar
-        )
-        
-        gr.Text(" To make the upload faster Upload documents one at a time  ")
+        # RIGHT SIDE - Chat Interface
+        with gr.Column(scale=3):
+            gr.Markdown("### 💬 Ask Questions")
+            
+            # ChatBot component (stores history automatically)
+            chatbot = gr.Chatbot(
+                label="Conversation",
+                height=500,
+                buttons=['copy_all']
+            )
+            
+            # Question input
+            question_input = gr.Textbox(
+                label="",
+                placeholder="Ask a question about your document...",
+                lines=2
+            )
+            
+            # Buttons row
+            with gr.Row():
+                submit_btn = gr.Button("Send", variant="primary")
+                clear_btn = gr.Button("Clear Chat")
+            
+            # Connect buttons
+            submit_btn.click(
+                fn=chat_response,
+                inputs=[question_input, chatbot],
+                outputs=[chatbot, question_input]
+            )
+            
+            question_input.submit(  # Also submit on Enter key
+                fn=chat_response,
+                inputs=[question_input, chatbot],
+                outputs=[chatbot, question_input]
+            )
+            
+            clear_btn.click(
+                fn=lambda: ([], ""),
+                inputs=[],
+                outputs=[chatbot, question_input]
+             )
 
-        
-    with gr.Tab("Ask Questions"):
-        # Question input
-        question_input = gr.Textbox(
-            label="Your Question",
-            placeholder=" What is ..... "
-        )
-        
-        # Answer Button
-        answer_btn = gr.Button(" Get Answer ")
-        
-        # Answer Output
-        answer_output = gr.Textbox(label="Answer", lines=5)
-        
-        # Connect button to function
-        answer_btn.click(
-            fn=answer_question,
-            inputs=[question_input],
-            outputs=[answer_output],
-        )
-        
-# Run App
 if __name__ == "__main__":
-    demo.launch(
-        show_error=True,
-        theme=gr.themes.Origin()
-    )
-        
+    demo.launch(show_error=True)
